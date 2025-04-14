@@ -7,6 +7,7 @@ from config import AI_ROUTER_API_KEY
 from twilio.twiml.messaging_response import MessagingResponse
 from langdetect import detect
 from deep_translator import GoogleTranslator
+from textblob import TextBlob
 
 app = Flask(__name__)
 
@@ -177,9 +178,15 @@ def translate_to_arabic(text):
     except Exception as e:
         print(f"Translation to Arabic failed: {e}")
         return text
+    
+def correct_spelling(text):
+    """Corrects spelling mistakes in the input text."""
+    return str(TextBlob(text).correct())
 
 def get_ai_response(user_id, user_message):
     """Handles user queries, predefined responses, and appointment booking (step-by-step)."""
+
+    user_message = correct_spelling(user_message)
 
     # Detect language
     try:
@@ -200,13 +207,34 @@ def get_ai_response(user_id, user_message):
         response = "You have exited the current flow. How can I assist you further?"
         return translate_to_arabic(response) if user_language == "ar" else response
 
+    # General question detection (e.g., symptoms, diseases, treatments)
+    general_question_keywords = ["symptoms", "disease", "treatment", "causes", "health issue", "medicine", "cure"]
+    if any(keyword in lower_message for keyword in general_question_keywords):
+        try:
+            # Use litellm model for general questions
+            response = litellm.completion(
+                model="groq/llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": user_message}],
+                temperature=0.7,
+                api_key=AI_ROUTER_API_KEY
+            )
+            response_text = response["choices"][0]["message"]["content"]
+            return translate_to_arabic(response_text) if user_language == "ar" else response_text
+        except Exception as e:
+            print(f"Error with litellm model: {e}")
+            response = "⚠️ Sorry, I couldn't fetch the information at the moment. Please try again later."
+            return translate_to_arabic(response) if user_language == "ar" else response
+
     # Phrases to trigger the booking flow
     booking_phrases = [
         "i want to book an appointment",
         "i need to schedule an appointment",
         "can i book an appointment?",
         "i'd like to make an appointment",
-        "how do i book an appointment?"
+        "how do i book an appointment?",
+        "i want to connect with the doctor",
+        "schedule a meeting with the doctor",
+        "book a session"
     ]
 
     # Check if the user's message matches any booking phrase
@@ -367,8 +395,14 @@ def get_ai_response(user_id, user_message):
         response_text = response["choices"][0]["message"]["content"]
         return translate_to_arabic(response_text) if user_language == "ar" else response_text
     except Exception as e:
-        response = f"Error: {e}"
-        return translate_to_arabic(response) if user_language == "ar" else response
+        print(f"Error with AI model: {e}")
+
+    # Final fallback response
+    fallback_response = (
+        "I'm sorry, I couldn't find the information you're looking for. "
+        "Please try rephrasing your question or let me connect you to a human agent for further assistance."
+    )
+    return translate_to_arabic(fallback_response) if user_language == "ar" else fallback_response
 
 
 @app.route("/twilio-webhook", methods=["POST"])
